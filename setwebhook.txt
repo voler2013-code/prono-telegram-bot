@@ -1,0 +1,4 @@
+# Reemplaza <TOKEN> y <TU_URL> y ejecuta en tu terminal (cmd/PowerShell):
+curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" ^
+-H "Content-Type: application/json" ^
+-d "{\"url\": \"<TU_URL>/webhook/<TOKEN>\"}"
