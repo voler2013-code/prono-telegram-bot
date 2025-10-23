@@ -99,7 +99,7 @@ MODELOS = {
             "relative_humidity_850hPa","relative_humidity_800hPa","relative_humidity_750hPa","relative_humidity_700hPa",
         ]
     },
-    "ecmwf_ifs025": {
+    "ecmwf_ifs": {
         "vars": [
             "temperature_2m","relative_humidity_2m",
             "temperature_1000hPa","temperature_925hPa","temperature_850hPa","temperature_700hPa",
