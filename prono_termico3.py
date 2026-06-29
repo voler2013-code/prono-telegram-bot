@@ -228,128 +228,149 @@ def fetch_model_data(lat: float, lon: float, fecha: date, modelo: str, vars_list
         return None
 
 #AGREGADO PARA EL SONDEO GRAFICO
-import decimal
-from typing import Dict, List
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Dict, List, Any
 
 
-def _round_half_up(x: float) -> int:
-    return int(decimal.Decimal(repr(x)).to_integral_value(
-        rounding=decimal.ROUND_HALF_UP
-    ))
+def D(x) -> Decimal:
+    return Decimal(str(x))
 
 
-def generar_sondeo(stats: Dict[int, Dict[str, float]], elevacion: float,
-                    ancho: int = 40) -> List[str]:
+def round_half_up(x) -> int:
+    return int(D(x).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
+
+def fmt1(x: Decimal) -> str:
+    return f"{x:.1f}"
+
+
+def pendiente(h1: int, h2: int, v1: Decimal, v2: Decimal,
+              eps: Decimal = Decimal("0.001")) -> Decimal:
+    dx = v2 - v1
+    if dx == 0:
+        dx = eps
+    return Decimal(h2 - h1) / dx
+
+
+def char_humedad(p: Decimal) -> str:
+    # =if(AND(p>1;p<460);"/";if(AND(p>=460;p<10000);"|";"\"))
+    if p > 1 and p < 460:
+        return "/"
+    if p >= 460 and p < 10000:
+        return "|"
+    return "\\"
+
+
+def char_temperatura(p: Decimal) -> str:
+    # =if(AND(p<-1;p>-400);"\";if(AND(p<=-400;p>-10000);"|";"/"))
+    if p < -1 and p > -400:
+        return "\\"
+    if p <= -400 and p > -10000:
+        return "|"
+    return "/"
+
+
+def calcular_sondeo(stats: Dict[int, Dict[str, float]], elevacion: int) -> Dict[str, Any]:
     if not stats:
-        return []
+        raise ValueError("stats está vacío")
 
-    base = int(round(elevacion))
-    alturas = sorted(h for h in stats.keys() if h >= base)
-
-    if base not in alturas:
-        if 2 not in stats:
-            return []
-        alturas = sorted(set(alturas) | {base})
-
+    alturas = sorted(h for h in stats if h >= elevacion)
     if len(alturas) < 2:
-        return []
+        raise ValueError("Se necesitan al menos 2 alturas")
 
-    def valores(h: int):
-        if h in stats:
-            return stats[h]["T_mean"], stats[h]["Td_mean"]
-        return stats[2]["T_mean"], stats[2]["Td_mean"]
+    # 1) valores base
+    T = {h: D(stats[h]["T_mean"]) for h in alturas}
+    Td = {h: D(stats[h]["Td_mean"]) for h in alturas}
 
-    T = {}
-    Td = {}
-    for h in alturas:
-        t_val, td_val = valores(h)
-        T[h] = t_val
-        Td[h] = td_val
+    # 2) normalización exacta: +0.5 °C cada 100 m
+    T_norm = {h: T[h] + D("0.5") * D(h) / D("100") for h in alturas}
+    Td_norm = {h: Td[h] + D("0.5") * D(h) / D("100") for h in alturas}
 
-    T_norm = {h: T[h] + 0.5 * (h / 100.0) for h in alturas}
-    Td_norm = {h: Td[h] + 0.5 * (h / 100.0) for h in alturas}
-    T_norm_r = {h: _round_half_up(T_norm[h]) for h in alturas}
-    Td_norm_r = {h: _round_half_up(Td_norm[h]) for h in alturas}
+    # 3) mínimo dewpoint normalizado, abs y redondeo a 0 decimales
+    offset = round_half_up(abs(min(Td_norm.values())))
 
-    offset = _round_half_up(abs(min(Td_norm_r.values())))
-    Td_shift = {h: Td_norm_r[h] + offset for h in alturas}
-    diff = {h: abs(T_norm_r[h] - Td_norm_r[h]) for h in alturas}
+    # 4) desplazar dewpoint y redondear a 0 decimales
+    Td_shift = {h: round_half_up(Td_norm[h] + D(offset)) for h in alturas}
 
-    def _pendiente(h1: int, h2: int, x1: float, x2: float) -> float:
-        dx = x2 - x1
-        if dx == 0:
-            dx = 0.001
-        return (h2 - h1) / dx
+    # 7) separación entre temp y dewpoint: con valores exactos, luego redondeo
+    diff = {h: round_half_up(abs(T_norm[h] - Td_norm[h])) for h in alturas}
 
-    pend_H: Dict[int, float] = {}
+    # 5-6) pendiente humedad, usando Td_norm exacto
+    pend_H = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
-        pend_H[h2] = _pendiente(h1, h2, Td_norm[h1], Td_norm[h2])
+        pend_H[h2] = pendiente(h1, h2, Td_norm[h1], Td_norm[h2])
     pend_H[alturas[0]] = pend_H[alturas[1]]
 
-    pend_T: Dict[int, float] = {}
+    # 8-9) pendiente temperatura, usando T_norm exacto
+    pend_T = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
-        pend_T[h2] = _pendiente(h1, h2, T_norm_r[h1], T_norm_r[h2])
+        pend_T[h2] = pendiente(h1, h2, T_norm[h1], T_norm[h2])
     pend_T[alturas[0]] = pend_T[alturas[1]]
 
-    def _char_humedad(p: float) -> str:
-        if 1 < p < 460:
-            return "/"
-        if 460 <= p < 10000:
-            return "|"
-        return "\\"
+    bar_H = {h: char_humedad(pend_H[h]) for h in alturas}
+    bar_T = {h: char_temperatura(pend_T[h]) for h in alturas}
 
-    def _char_temperatura(p: float) -> str:
-        if -400 < p < -1:
-            return "\\"
-        if -10000 < p <= -400:
-            return "|"
-        return "/"
+    return {
+        "alturas": alturas,
+        "T_norm": T_norm,
+        "Td_norm": Td_norm,
+        "offset": offset,
+        "Td_shift": Td_shift,
+        "diff": diff,
+        "pend_H": pend_H,
+        "pend_T": pend_T,
+        "bar_H": bar_H,
+        "bar_T": bar_T,
+    }
 
-    alturas_grafico = sorted(
-        (h for h in alturas if h >= base), reverse=True
-    )[1:] if len(alturas) > 1 else []
 
-    tope_seguridad = max(ancho * 4, 200)
+def generar_sondeo(stats: Dict[int, Dict[str, float]], elevacion: int) -> List[str]:
+    calc = calcular_sondeo(stats, elevacion)
+    alturas = calc["alturas"]
 
-    resultado: List[str] = []
-    for h in alturas_grafico:
-        # ---------- MODIFICACIÓN PARA REDUCIR PUNTOS A LA MITAD ----------
-        n_h_completo = max(0, min(Td_shift[h], tope_seguridad))
-        n_t_completo = max(0, min(diff[h], tope_seguridad))
-        n_h = n_h_completo // 2       # ← mitad de puntos para humedad
-        n_t = n_t_completo // 2       # ← mitad de puntos para temperatura
-        # ----------------------------------------------------------------
+    # La más alta solo se usa para pendiente; no se imprime
+    visibles = sorted(alturas, reverse=True)[1:]
 
-        c_h = _char_humedad(pend_H[h])
-        c_t = _char_temperatura(pend_T[h])
-        cadena = "." * n_h + c_h + "." * n_t + c_t
-        resultado.append(f"{h:>4}m - {cadena}")
+    lineas = []
+    for h in visibles:
+        izq = "." * calc["Td_shift"][h]
+        der = "." * calc["diff"][h]
+        linea = f"{h:04d}m - {izq}{calc['bar_H'][h]}{der}{calc['bar_T'][h]}"
+        lineas.append(linea)
+    return lineas
 
-    return resultado
+
+def imprimir_debug(stats: Dict[int, Dict[str, float]], elevacion: int) -> None:
+    calc = calcular_sondeo(stats, elevacion)
+
+
+    print("\nGRAFICO FINAL")
+    for linea in generar_sondeo(stats, elevacion):
+        print(linea)
 
 
 if __name__ == "__main__":
+    # OJO: aquí va 1100, no 1000
     stats = {
-        600:  {"T_mean": 12.9,  "Td_mean": -5.1},
-        800:  {"T_mean": 11.1,  "Td_mean": -6.1},
-        1000: {"T_mean": 9.0,   "Td_mean": -6.5},
-        1300: {"T_mean": 6.9,   "Td_mean": -6.6},
-        1500: {"T_mean": 4.7,   "Td_mean": -6.9},
-        1800: {"T_mean": 3.9,   "Td_mean": -7.0},
-        2000: {"T_mean": 3.1,   "Td_mean": -7.1},
-        2300: {"T_mean": 2.5,   "Td_mean": -13.6},
-        2500: {"T_mean": 2.0,   "Td_mean": -24.9},
-        2800: {"T_mean": 1.8,   "Td_mean": -28.8},
-        3100: {"T_mean": 1.6,   "Td_mean": -34.3},
-        3400: {"T_mean": 0.1,   "Td_mean": -35.1},
+        600:  {"T_mean": 9.0,  "Td_mean": -4.7},
+        800:  {"T_mean": 8.4,  "Td_mean": -5.0},
+        1100: {"T_mean": 6.9,  "Td_mean": -5.6},
+        1300: {"T_mean": 5.4,  "Td_mean": -6.5},
+        1500: {"T_mean": 3.9,  "Td_mean": -7.4},
+        1800: {"T_mean": 4.0,  "Td_mean": -10.5},
+        2000: {"T_mean": 4.2,  "Td_mean": -14.6},
+        2300: {"T_mean": 4.0,  "Td_mean": -19.8},
+        2500: {"T_mean": 3.9,  "Td_mean": -28.4},
+        2800: {"T_mean": 2.6,  "Td_mean": -31.2},
+        3100: {"T_mean": 1.3,  "Td_mean": -34.4},
+        3400: {"T_mean": -0.2, "Td_mean": -33.0},
     }
-    print("Sondeo promedio:")
-    for linea in generar_sondeo(stats, 600.0):
-        print(linea)
 
+  
+
+#FIN AGREGADO PARA IMPRIMIR SONDEO
       
 
 def find_hour_index(times: List[str], target_hour: int) -> Optional[int]:
