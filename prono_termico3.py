@@ -543,6 +543,116 @@ def procesar_consulta(query: str) -> None:
     t2m_out = t_custom if t_custom is not None else stats_por_altura[2]["T_mean"]
     print(fmt_row(int(round(elevation)), td2m_out, t2m_out, 0.0, 0.0))
 
+def generar_sondeo(estadisticas, elevacion, ancho=40):
+    """
+    Genera las líneas del sondeo visual (gradiente de humedad / temperatura).
+    Recibe un diccionario con las estadísticas por altura y la elevación del lugar.
+    Devuelve una lista de strings, una por cada altura > elevación, ordenadas de mayor a menor.
+    """
+    # -- 1. Filtrar y ordenar altitudes > elevación ---------------------------------
+    alturas = sorted([h for h in estadisticas.keys() if h > elevacion], reverse=True)
+    if not alturas:
+        return []
+
+    # -- 2. Extraer T y Td normalizadas (sumando 0,5 °C cada 100 m) -----------------
+    T_norm = {}
+    Td_norm = {}
+    for h in alturas:
+        d = estadisticas[h]
+        # Solo usamos los valores medios
+        t = d.get("T_mean", float('nan'))
+        td = d.get("Td_mean", float('nan'))
+        if not math.isnan(t):
+            T_norm[h] = t + 0.5 * (h / 100)
+        if not math.isnan(td):
+            Td_norm[h] = td + 0.5 * (h / 100)
+
+    if len(T_norm) < 2 or len(Td_norm) < 2:
+        return []
+
+    # -- 3. Calcular pendientes entre cada altura y la inmediata inferior ------------
+    pendientes_hum = {}   # pendiente de la Td normalizada
+    pendientes_temp = {}  # pendiente de la T  normalizada
+    for i in range(len(alturas) - 1):
+        h_up = alturas[i]
+        h_dn = alturas[i + 1]
+        # Pendiente de humedad (Td)
+        if h_up in Td_norm and h_dn in Td_norm:
+            dtd = Td_norm[h_dn] - Td_norm[h_up]
+            dh = h_dn - h_up
+            pendientes_hum[h_up] = dtd / dh * 100  # escalar a algo manejable
+        # Pendiente de temperatura
+        if h_up in T_norm and h_dn in T_norm:
+            dt = T_norm[h_dn] - T_norm[h_up]
+            pendientes_temp[h_up] = dt / dh * 100
+
+    # Para la última altura no hay pendiente, podemos repetir la anterior o dejarla fija
+    if alturas and alturas[-1] in pendientes_hum:
+        pendientes_hum[alturas[-1]] = pendientes_hum[alturas[-1]]  # mismo valor
+        pendientes_temp[alturas[-1]] = pendientes_temp.get(alturas[-1], 0)
+
+    # -- 4. Encontrar el rango de cada pendiente para escalar posiciones ------------
+    todos_hum = list(pendientes_hum.values())
+    todos_temp = list(pendientes_temp.values())
+    min_hum, max_hum = min(todos_hum, default=0), max(todos_hum, default=0)
+    min_temp, max_temp = min(todos_temp, default=0), max(todos_temp, default=0)
+
+    # Evitar división por cero
+    rango_hum = max_hum - min_hum if max_hum != min_hum else 1
+    rango_temp = max_temp - min_temp if max_temp != min_temp else 1
+
+    # -- 5. Construir las líneas ----------------------------------------------------
+    lineas = []
+    for h in alturas:
+        # Calcular posición y carácter de humedad
+        ph = pendientes_hum.get(h, 0)
+        pos_h = int((ph - min_hum) / rango_hum * ancho)
+        # Carácter: muy negativo -> \, muy positivo -> /, neutro -> |
+        if ph < -1.0:
+            char_hum = '\\'
+        elif ph > 1.0:
+            char_hum = '/'
+        else:
+            char_hum = '|'
+
+        # Calcular posición y carácter de temperatura
+        pt = pendientes_temp.get(h, 0)
+        pos_t = int((pt - min_temp) / rango_temp * ancho)
+        if pt < -1.0:
+            char_temp = '\\'
+        elif pt > 1.0:
+            char_temp = '/'
+        else:
+            char_temp = '|'
+
+        # Asegurar que las posiciones no se solapen y estén dentro del ancho
+        if pos_h < 0: pos_h = 0
+        if pos_h >= ancho: pos_h = ancho - 1
+        if pos_t < 0: pos_t = 0
+        if pos_t >= ancho: pos_t = ancho - 1
+
+        # Formar la línea: puntos hasta pos_h, luego char_hum, puntos hasta pos_t, char_temp, resto puntos
+        linea = ['.'] * ancho
+        # El carácter de humedad se coloca en pos_h
+        linea[pos_h] = char_hum
+        # El de temperatura se coloca en pos_t (solo si son distintos)
+        if pos_t != pos_h:
+            linea[pos_t] = char_temp
+        else:
+            # Si coinciden, se fuerza que el de temperatura vaya justo al lado
+            pos_t = (pos_t + 1) % ancho
+            linea[pos_t] = char_temp
+
+        cadena = ''.join(linea)
+        lineas.append(f"{h:>4}m - {cadena}")
+
+    return lineas
+
+# --------------------------------------------
+    # SONDEO VISUAL
+    print()
+    print(generar_sondeo(stats_por_altura, elevation, ancho=40))
+
 
 # ------------------------------- Main -------------------------------- #
 if __name__ == "__main__":
