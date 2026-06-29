@@ -34,7 +34,7 @@ async def telegram_webhook(request: Request):
         try:
             resultado = domain.resolver_consulta(text)
             # Escapar caracteres especiales para MarkdownV2 de Telegram
-            safe_resultado = resultado.replace("-", "\-").replace(".", "\.").replace("(", "\(").replace(")", "\)")
+            safe_resultado = resultado.replace("-", "\\-").replace(".", "\\.").replace("(", "\\(").replace(")", "\\)")
             reply = f"```\n{safe_resultado}\n```"
         except Exception as e:
             reply = f"Ocurrió un error procesando tu consulta: {e}"
