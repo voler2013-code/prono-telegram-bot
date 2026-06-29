@@ -626,7 +626,7 @@ def procesar_consulta(query: str) -> None:
 
     # ---------------------- Salida formateada ---------------------- #
     lugar_str = lugar_nombre if lugar_nombre else f"{lat:.2f},{lon:.2f}"
-    cabecera = f"{'m':<5}   {'R':<4}   {'T':<4}   {'H%':<5}   m/s"
+    cabecera = f"{'m':<5}   {'P.R':<4}   {'T':<4}   {'H%':<5}   m/s"
 
     print("Prono térmico para:")
     hoy = datetime.now().date()
