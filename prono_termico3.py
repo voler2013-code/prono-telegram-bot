@@ -533,21 +533,31 @@ def procesar_consulta(query: str) -> None:
     if t_custom is not None:
         por_altura[2]["T"] = [("custom", float(t_custom))]
 
-    # Promedios y std por altura
+    # Medianas y std por altura
     stats_por_altura = {}
     for altura_m, dct in por_altura.items():
         T_vals = [v for _, v in dct["T"]]
+        RH_vals = [v for _, v in dct["RH"]]
         Td_vals = [v for _, v in dct["Td"]]
+
         T_mean = float(np.nanmedian(T_vals)) if T_vals else float('nan')
         T_std = float(np.nanstd(T_vals, ddof=0)) if T_vals else float('nan')
+
+        RH_median = float(np.nanmedian(RH_vals)) if RH_vals else float('nan')
+        RH_std = float(np.nanstd(RH_vals, ddof=0)) if RH_vals else float('nan')
+
         Td_mean = float(np.nanmedian(Td_vals)) if Td_vals else float('nan')
         Td_std = float(np.nanstd(Td_vals, ddof=0)) if Td_vals else float('nan')
+
         stats_por_altura[altura_m] = {
             "T_mean": T_mean,
             "T_std": T_std,
+            "RH_median": RH_median,
+            "RH_std": RH_std,
             "Td_mean": Td_mean,
             "Td_std": Td_std,
         }
+
 
     # ---------------- Cálculo de velocTermica por modelo ----------------
     def veloc_termica(RocioTermica: float, Rocio: float, Temp: float) -> Optional[float]:
@@ -616,7 +626,7 @@ def procesar_consulta(query: str) -> None:
 
     # ---------------------- Salida formateada ---------------------- #
     lugar_str = lugar_nombre if lugar_nombre else f"{lat:.2f},{lon:.2f}"
-    cabecera = "m" + " " * 7 + "R;T" + " " * 7 + "m/s"
+    cabecera = f"{'m':<5}   {'R':<4}   {'T':<4}   {'H%':<5}   m/s"
 
     print("Prono térmico para:")
     hoy = datetime.now().date()
@@ -635,31 +645,52 @@ def procesar_consulta(query: str) -> None:
 
     alturas_out = sorted(alturas_ordenadas, reverse=True)
 
-    def fmt_row(altura: int, td: float, t: float, v: Optional[float], vs: Optional[float]) -> str:
-        td_str = "" if math.isnan(td) else f"{int(round(td))}"
-        t_str = "" if math.isnan(t) else f"{int(round(t))}"
+    def fmt_int(x: Optional[float]) -> str:
+        if x is None or math.isnan(x):
+            return ""
+        return f"{int(round(x))}"
+
+    def fmt_rh(x: Optional[float]) -> str:
+        if x is None or math.isnan(x):
+            return ""
+        return f"{int(round(x))}%"
+
+    def fmt_v(v: Optional[float], vs: Optional[float]) -> str:
         if v is None or math.isnan(v):
-            v_str = ""
-        else:
-            v_str = f"{v:.1f}"
-        if vs is None or math.isnan(vs) or (v is None or math.isnan(v)):
-            vs_str = ""
-        else:
-            vs_str = f"±{vs:.1f}"
-        return f"{altura:>4}   {td_str};{t_str:}   {v_str}{vs_str}"
+            return ""
+        if vs is None or math.isnan(vs):
+            return f"{v:.1f}"
+        return f"{v:.1f}±{vs:.1f}"
+
+    def fmt_row(
+        altura: int,
+        td: float,
+        t: float,
+        rh: float,
+        v: Optional[float],
+        vs: Optional[float]
+    ) -> str:
+        td_str = fmt_int(td)
+        t_str = fmt_int(t)
+        rh_str = fmt_rh(rh)
+        v_str = fmt_v(v, vs)
+        return f"{altura:>4}   {td_str:<4}   {t_str:<4}   {rh_str:<5}   {v_str}"
 
     for h in alturas_out:
         td_mean = stats_por_altura.get(h, {}).get("Td_mean", float('nan'))
         t_mean = stats_por_altura.get(h, {}).get("T_mean", float('nan'))
+        rh_median = stats_por_altura.get(h, {}).get("RH_median", float('nan'))
         v_mean = v_stats_por_altura.get(h, {}).get("v_mean", float('nan'))
         v_std = v_stats_por_altura.get(h, {}).get("v_std", float('nan'))
-        print(fmt_row(h, td_mean, t_mean, v_mean, v_std))
+        print(fmt_row(h, td_mean, t_mean, rh_median, v_mean, v_std))
 
     td2m_out = td_custom if td_custom is not None else stats_por_altura[2]["Td_mean"]
     t2m_out = t_custom if t_custom is not None else stats_por_altura[2]["T_mean"]
-    print(fmt_row(int(round(elevation)), td2m_out, t2m_out, 0.0, 0.0))
+    rh2m_out = stats_por_altura[2]["RH_median"]
 
-    # Sondeo gráfico
+    print(fmt_row(int(round(elevation)), td2m_out, t2m_out, rh2m_out, 0.0, 0.0))
+
+    # ------------------------------------Sondeo gráfico
     print()
     sondeo = generar_sondeo(stats_por_altura, elevation)
     if sondeo:
