@@ -270,42 +270,6 @@ def char_temperatura(p: Decimal) -> str:
     return "/"
 
 
-def _ajustar_segmentos(izq: int, der: int, ancho_cuerpo: int) -> tuple[int, int]:
-    """
-    Ajusta los puntos para que SIEMPRE entren:
-      [puntos izq] + barra_h + [puntos der] + barra_t
-
-    Prioridad:
-      1) conservar ambas barras
-      2) recortar puntos de la izquierda
-      3) si aún no alcanza, recortar puntos del tramo derecho
-    """
-    # mínimo absoluto: 2 barras
-    if ancho_cuerpo < 2:
-        return 0, 0
-
-    max_puntos = ancho_cuerpo - 2  # se reservan 2 chars para las barras
-    total_puntos = izq + der
-
-    if total_puntos <= max_puntos:
-        return izq, der
-
-    exceso = total_puntos - max_puntos
-
-    # primero recortar izquierda
-    quitar_izq = min(izq, exceso)
-    izq -= quitar_izq
-    exceso -= quitar_izq
-
-    # luego recortar derecha (puntos del medio), nunca la barra final
-    if exceso > 0:
-        quitar_der = min(der, exceso)
-        der -= quitar_der
-        exceso -= quitar_der
-
-    return max(0, izq), max(0, der)
-
-
 def generar_sondeo(
     stats: Dict[int, Dict[str, float]],
     elevacion: int,
@@ -318,12 +282,12 @@ def generar_sondeo(
 
     base = int(round(elevacion))
 
-    # alturas por encima de la base
+    # Alturas por encima de la base
     alturas_superiores = sorted(h for h in stats if h > base)
     if not alturas_superiores:
         return []
 
-    # fila base: elevación del modelo con T_2m / Td_2m
+    # Base con T_2m / Td_2m
     if t_2m is None or td_2m is None:
         if 2 in stats:
             if t_2m is None:
@@ -345,67 +309,77 @@ def generar_sondeo(
     T[base] = D(t_2m)
     Td[base] = D(td_2m)
 
-    # normalización exacta
+    # Normalización exacta
     T_norm = {h: T[h] + D("0.5") * D(h) / D("100") for h in alturas}
     Td_norm = {h: Td[h] + D("0.5") * D(h) / D("100") for h in alturas}
 
-    # offset
+    # Offset dewpoint
     offset = round_half_up(abs(min(Td_norm.values())))
 
-    # dew desplazado
+    # Paso 4
     Td_shift = {h: round_half_up(Td_norm[h] + D(offset)) for h in alturas}
 
-    # separación entre temp y dew
+    # Paso 7
     diff = {h: round_half_up(abs(T_norm[h] - Td_norm[h])) for h in alturas}
 
-    # pendientes humedad
-    pend_H = {}
-    for i in range(len(alturas) - 1):
-        h1, h2 = alturas[i], alturas[i + 1]
-        pend_H[h2] = pendiente(h1, h2, Td_norm[h1], Td_norm[h2])
-    pend_H[base] = pend_H[alturas[1]]
-
-    # pendientes temperatura
-    pend_T = {}
-    for i in range(len(alturas) - 1):
-        h1, h2 = alturas[i], alturas[i + 1]
-        pend_T[h2] = pendiente(h1, h2, T_norm[h1], T_norm[h2])
-    pend_T[base] = pend_T[alturas[1]]
-
-    bar_H = {h: char_humedad(pend_H[h]) for h in alturas}
-    bar_T = {h: char_temperatura(pend_T[h]) for h in alturas}
-
-    # la más alta solo calcula pendiente
+    # Filas visibles: la más alta solo sirve para calcular pendiente
     visibles = sorted(alturas, reverse=True)[1:]
 
-    filas = []
-    for h in visibles:
-        filas.append({
-            "altura": h,
-            "izq": max(0, Td_shift[h]),
-            "bar_h": bar_H[h],
-            "der": max(0, diff[h]),
-            "bar_t": bar_T[h],
-        })
+    # Para buscar vecinos en ascendente
+    idx = {h: i for i, h in enumerate(alturas)}
 
-    # prefijo fijo: "0600m "
+    def barra_h_por_fila(h: int) -> str:
+        # Regla del ejemplo:
+        # - la fila base copia la pendiente base-siguiente
+        # - toda otra fila h usa la pendiente entre la altura inferior inmediata y h
+        if h == base:
+            h1, h2 = alturas[0], alturas[1]
+        else:
+            i = idx[h]
+            h1, h2 = alturas[i - 1], alturas[i]
+        p = pendiente(h1, h2, Td_norm[h1], Td_norm[h2])
+        return char_humedad(p)
+
+    def barra_t_por_fila(h: int) -> str:
+        # Misma lógica para temperatura
+        if h == base:
+            h1, h2 = alturas[0], alturas[1]
+        else:
+            i = idx[h]
+            h1, h2 = alturas[i - 1], alturas[i]
+        p = pendiente(h1, h2, T_norm[h1], T_norm[h2])
+        return char_temperatura(p)
+
+    # Ancho del prefijo "0600m "
     prefijo_len = 6
-    ancho_cuerpo = max(2, ancho - prefijo_len)
+    ancho_cuerpo = max(1, ancho - prefijo_len)
 
-    # recorte global por izquierda según la fila más larga
-    max_cuerpo_bruto = max(f["izq"] + 1 + f["der"] + 1 for f in filas)
-    recorte_global = max(0, max_cuerpo_bruto - ancho_cuerpo)
+    # Cálculo del recorte global SOLO desde la izquierda
+    # Nunca se toca barra derecha ni puntos derechos
+    max_cuerpo = max(Td_shift[h] + 1 + diff[h] + 1 for h in visibles)
+    recorte_global = max(0, max_cuerpo - ancho_cuerpo)
 
     resultado = []
-    for f in filas:
-        izq = max(0, f["izq"] - recorte_global)
-        der = f["der"]
+    for h in visibles:
+        izq = max(0, Td_shift[h] - recorte_global)
+        der = diff[h]
 
-        # ajuste final garantizando ambas barras
-        izq, der = _ajustar_segmentos(izq, der, ancho_cuerpo)
+        bh = barra_h_por_fila(h)
+        bt = barra_t_por_fila(h)
 
-        cuerpo = "." * izq + f["bar_h"] + "." * der + f["bar_t"]
-        resultado.append(f"{f['altura']:04d}m {cuerpo}")
+        # Si aún excede, solo recortar izquierda adicional.
+        # Nunca recortar parte derecha ni la barra final.
+        cuerpo_minimo_derecha = 1 + der + 1  # barra_h + puntos der + barra_t
+        max_izq = max(0, ancho_cuerpo - cuerpo_minimo_derecha)
+        izq = min(izq, max_izq)
+
+        cuerpo = "." * izq + bh + "." * der + bt
+
+        # Garantía explícita: la línea SIEMPRE termina en barra derecha válida
+        if not cuerpo.endswith(("/", "|", "\\")):
+            cuerpo = cuerpo + bt
+
+        resultado.append(f"{h:04d}m {cuerpo}")
 
     return resultado
 
@@ -434,6 +408,7 @@ if __name__ == "__main__":
         ancho=40
     ):
         print(linea)
+
 
 
 #FIN AGREGADO PARA IMPRIMIR SONDEO
