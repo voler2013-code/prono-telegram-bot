@@ -6,7 +6,7 @@ Script: pronostico_termico_open_meteo.py
 Descripción:
   - Interpreta una consulta flexible tipo: "hoy; 15hs; cuchi" o "01-12-2025; 14hs; -31,55; -64,33; -9; 25"
   - Llama a múltiples modelos de Open-Meteo (icon, gfs, meteo-france, ecmwf, ukmo, gem, cma) para obtener
-    temperatura y humedad por alturas (2 m y niveles ~1000–700 hPa) en una fecha y hora dadas.
+    temperatura y humedad por alturas (2 m y niveles ~1000–500 hPa) en una fecha y hora dadas.
   - Calcula promedios y desviaciones estándar por altura.
   - Calcula punto de rocío con la fórmula: Td = T + 35 * log10(RH/100).
   - Calcula "velocTermica" por altura > elevación usando:
@@ -15,6 +15,7 @@ Descripción:
     *Para el resto de alturas*: RocioTermica = Td_2m (o personalizado) - [(altura_actual - elevación) * 0.0018]
   - Presenta salida formateada desde la primera altura superior a la elevación hacia arriba
     y agrega la fila de la elevación con Td_2m; T_2m y 0.
+  - Incluye un sondeo gráfico con barras oblicuas según pendientes.
 
 Requisitos:
   pip install requests numpy
@@ -56,7 +57,7 @@ LUGARES: Dict[str, Tuple[float, float]] = {
     "tuc": (-26.77, -65.28),
 }
 
-# Alturas (m) por variable en el JSON
+# Alturas (m) por variable en el JSON (ahora incluye 600 hPa y 500 hPa)
 LEVELS = [
     ("2m", 2, "temperature_2m", "relative_humidity_2m"),
     ("1000hPa", 110, "temperature_1000hPa", "relative_humidity_1000hPa"),
@@ -68,9 +69,13 @@ LEVELS = [
     ("800hPa", 1900, "temperature_800hPa", "relative_humidity_800hPa"),
     ("750hPa", 2500, "temperature_750hPa", "relative_humidity_750hPa"),
     ("700hPa", 3000, "temperature_700hPa", "relative_humidity_700hPa"),
+    ("600hPa", 4200, "temperature_600hPa", "relative_humidity_600hPa"),   # NUEVO
+    ("500hPa", 5600, "temperature_500hPa", "relative_humidity_500hPa"),   # NUEVO
 ]
 
-# Modelos y sus conjuntos de variables disponibles (según los links provistos)
+# Modelos y sus conjuntos de variables disponibles.
+# NOTA: ecmwf_ifs solo maneja un subconjunto reducido; los demás modelos tienen
+# disponibilidad completa incluyendo 600 y 500 hPa.
 MODELOS = {
     "icon_seamless": {
         "vars": [
@@ -78,8 +83,10 @@ MODELOS = {
             "relative_humidity_2m",
             "temperature_1000hPa","temperature_975hPa","temperature_950hPa","temperature_925hPa",
             "temperature_900hPa","temperature_850hPa","temperature_800hPa","temperature_700hPa",
+            "temperature_600hPa","temperature_500hPa",                                                # NUEVO
             "relative_humidity_1000hPa","relative_humidity_975hPa","relative_humidity_950hPa","relative_humidity_925hPa",
             "relative_humidity_900hPa","relative_humidity_850hPa","relative_humidity_800hPa","relative_humidity_700hPa",
+            "relative_humidity_600hPa","relative_humidity_500hPa",                                    # NUEVO
         ]
     },
     "gfs_seamless": {
@@ -87,8 +94,10 @@ MODELOS = {
             "temperature_2m","relative_humidity_2m",
             "temperature_700hPa","temperature_750hPa","temperature_800hPa","temperature_850hPa",
             "temperature_900hPa","temperature_925hPa","temperature_950hPa","temperature_975hPa","temperature_1000hPa",
+            "temperature_600hPa","temperature_500hPa",                                                # NUEVO
             "relative_humidity_700hPa","relative_humidity_750hPa","relative_humidity_800hPa","relative_humidity_850hPa",
             "relative_humidity_900hPa","relative_humidity_925hPa","relative_humidity_950hPa","relative_humidity_975hPa","relative_humidity_1000hPa",
+            "relative_humidity_600hPa","relative_humidity_500hPa",                                    # NUEVO
         ]
     },
     "meteofrance_seamless": {
@@ -96,8 +105,10 @@ MODELOS = {
             "temperature_2m","relative_humidity_2m",
             "temperature_1000hPa","temperature_950hPa","temperature_925hPa","temperature_900hPa",
             "temperature_850hPa","temperature_800hPa","temperature_750hPa","temperature_700hPa",
+            "temperature_600hPa","temperature_500hPa",                                                # NUEVO
             "relative_humidity_1000hPa","relative_humidity_950hPa","relative_humidity_925hPa","relative_humidity_900hPa",
             "relative_humidity_850hPa","relative_humidity_800hPa","relative_humidity_750hPa","relative_humidity_700hPa",
+            "relative_humidity_600hPa","relative_humidity_500hPa",                                    # NUEVO
         ]
     },
     "ecmwf_ifs": {
@@ -105,6 +116,7 @@ MODELOS = {
             "temperature_2m","relative_humidity_2m",
             "temperature_1000hPa","temperature_925hPa","temperature_850hPa","temperature_700hPa",
             "relative_humidity_1000hPa","relative_humidity_925hPa","relative_humidity_850hPa","relative_humidity_700hPa",
+            # ecmwf no dispone de más niveles en la API gratuita
         ]
     },
     "ukmo_seamless": {
@@ -112,8 +124,10 @@ MODELOS = {
             "temperature_2m","relative_humidity_2m",
             "temperature_1000hPa","temperature_975hPa","temperature_950hPa","temperature_925hPa",
             "temperature_900hPa","temperature_850hPa","temperature_800hPa","temperature_750hPa","temperature_700hPa",
+            "temperature_600hPa","temperature_500hPa",                                                # NUEVO
             "relative_humidity_1000hPa","relative_humidity_975hPa","relative_humidity_950hPa","relative_humidity_925hPa",
             "relative_humidity_900hPa","relative_humidity_850hPa","relative_humidity_800hPa","relative_humidity_750hPa","relative_humidity_700hPa",
+            "relative_humidity_600hPa","relative_humidity_500hPa",                                    # NUEVO
         ]
     },
     "gem_seamless": {
@@ -121,8 +135,10 @@ MODELOS = {
             "temperature_2m","relative_humidity_2m",
             "temperature_1000hPa","temperature_950hPa","temperature_925hPa","temperature_900hPa",
             "temperature_850hPa","temperature_800hPa","temperature_750hPa","temperature_700hPa",
+            "temperature_600hPa","temperature_500hPa",                                                # NUEVO
             "relative_humidity_700hPa","relative_humidity_750hPa","relative_humidity_800hPa","relative_humidity_850hPa",
             "relative_humidity_900hPa","relative_humidity_925hPa","relative_humidity_950hPa","relative_humidity_1000hPa",
+            "relative_humidity_600hPa","relative_humidity_500hPa",                                    # NUEVO
         ]
     },
     "cma_grapes_global": {
@@ -130,8 +146,10 @@ MODELOS = {
             "temperature_2m","relative_humidity_2m",
             "temperature_1000hPa","temperature_975hPa","temperature_950hPa","temperature_925hPa",
             "temperature_900hPa","temperature_850hPa","temperature_800hPa","temperature_750hPa","temperature_700hPa",
+            "temperature_600hPa","temperature_500hPa",                                                # NUEVO
             "relative_humidity_1000hPa","relative_humidity_975hPa","relative_humidity_950hPa","relative_humidity_925hPa",
             "relative_humidity_900hPa","relative_humidity_850hPa","relative_humidity_800hPa","relative_humidity_750hPa","relative_humidity_700hPa",
+            "relative_humidity_600hPa","relative_humidity_500hPa",                                    # NUEVO
         ]
     },
 }
@@ -227,19 +245,15 @@ def fetch_model_data(lat: float, lon: float, fecha: date, modelo: str, vars_list
     except Exception:
         return None
 
-#AGREGADO PARA EL SONDEO GRAFICO
-
+# ---------------------- SONDEO GRÁFICO ----------------------
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional
-
 
 def D(x) -> Decimal:
     return Decimal(str(x))
 
-
 def round_half_up(x) -> int:
     return int(D(x).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
 
 def pendiente(
     h1: int,
@@ -253,7 +267,6 @@ def pendiente(
         dx = eps
     return Decimal(h2 - h1) / dx
 
-
 def char_humedad(p: Decimal) -> str:
     if p > 1 and p < 460:
         return "/"
@@ -261,14 +274,12 @@ def char_humedad(p: Decimal) -> str:
         return "|"
     return "\\"
 
-
 def char_temperatura(p: Decimal) -> str:
     if p < -1 and p > -400:
         return "\\"
     if p <= -400 and p > -10000:
         return "|"
     return "/"
-
 
 def generar_sondeo(
     stats: Dict[int, Dict[str, float]],
@@ -329,9 +340,6 @@ def generar_sondeo(
     idx = {h: i for i, h in enumerate(alturas)}
 
     def barra_h_por_fila(h: int) -> str:
-        # Regla del ejemplo:
-        # - la fila base copia la pendiente base-siguiente
-        # - toda otra fila h usa la pendiente entre la altura inferior inmediata y h
         if h == base:
             h1, h2 = alturas[0], alturas[1]
         else:
@@ -341,7 +349,6 @@ def generar_sondeo(
         return char_humedad(p)
 
     def barra_t_por_fila(h: int) -> str:
-        # Misma lógica para temperatura
         if h == base:
             h1, h2 = alturas[0], alturas[1]
         else:
@@ -355,7 +362,6 @@ def generar_sondeo(
     ancho_cuerpo = max(1, ancho - prefijo_len)
 
     # Cálculo del recorte global SOLO desde la izquierda
-    # Nunca se toca barra derecha ni puntos derechos
     max_cuerpo = max(Td_shift[h] + 1 + diff[h] + 1 for h in visibles)
     recorte_global = max(0, max_cuerpo - ancho_cuerpo)
 
@@ -367,15 +373,12 @@ def generar_sondeo(
         bh = barra_h_por_fila(h)
         bt = barra_t_por_fila(h)
 
-        # Si aún excede, solo recortar izquierda adicional.
-        # Nunca recortar parte derecha ni la barra final.
         cuerpo_minimo_derecha = 1 + der + 1  # barra_h + puntos der + barra_t
         max_izq = max(0, ancho_cuerpo - cuerpo_minimo_derecha)
         izq = min(izq, max_izq)
 
         cuerpo = "." * izq + bh + "." * der + bt
 
-        # Garantía explícita: la línea SIEMPRE termina en barra derecha válida
         if not cuerpo.endswith(("/", "|", "\\")):
             cuerpo = cuerpo + bt
 
@@ -383,42 +386,11 @@ def generar_sondeo(
 
     return resultado
 
-
-if __name__ == "__main__":
-    stats = {
-        800:  {"T_mean": 8.4,  "Td_mean": -5.0},
-        1100: {"T_mean": 6.9,  "Td_mean": -5.6},
-        1300: {"T_mean": 5.4,  "Td_mean": -6.5},
-        1500: {"T_mean": 3.9,  "Td_mean": -7.4},
-        1800: {"T_mean": 4.0,  "Td_mean": -10.5},
-        2000: {"T_mean": 4.2,  "Td_mean": -14.6},
-        2300: {"T_mean": 4.0,  "Td_mean": -19.8},
-        2500: {"T_mean": 3.9,  "Td_mean": -28.4},
-        2800: {"T_mean": 2.6,  "Td_mean": -31.2},
-        3100: {"T_mean": 1.3,  "Td_mean": -34.4},
-        3400: {"T_mean": -0.2, "Td_mean": -33.0},
-    }
-
-    print("Sondeo promedio:")
-    for linea in generar_sondeo(
-        stats=stats,
-        elevacion=600,
-        t_2m=9.0,
-        td_2m=-4.7,
-        ancho=40
-    ):
-        print(linea)
-
-
-
-#FIN AGREGADO PARA IMPRIMIR SONDEO
-      
+# ----------------------- Núcleo de procesamiento ----------------------- #
 
 def find_hour_index(times: List[str], target_hour: int) -> Optional[int]:
-    # times vienen en ISO con timezone aplicado. Buscar HH:00
     for i, ts in enumerate(times):
         try:
-            # Aceptamos formato sin zona explícita (Open-Meteo entrega "YYYY-MM-DDTHH:MM")
             hh = int(ts[11:13])
             if hh == target_hour:
                 return i
@@ -426,7 +398,6 @@ def find_hour_index(times: List[str], target_hour: int) -> Optional[int]:
             continue
     return None
 
-# ----------------------- Núcleo de procesamiento ----------------------- #
 
 def procesar_consulta(query: str) -> None:
     tokens = [t.strip() for t in query.split(';') if t.strip() != ""]
@@ -438,8 +409,7 @@ def procesar_consulta(query: str) -> None:
     td_custom: Optional[float] = None
     t_custom: Optional[float] = None
 
-    # Primero, clasificar tokens obvios
-    numeric_positions = []  # (idx, value)
+    numeric_positions = []
 
     for idx, tok in enumerate(tokens):
         if fecha is None:
@@ -457,27 +427,22 @@ def procesar_consulta(query: str) -> None:
             if lug is not None:
                 lugar_nombre, coords = lug[0], lug[1]
                 continue
-        # Si no fue ninguno de los anteriores, ver si es número
         val = parse_float(tok)
         if val is not None:
             numeric_positions.append((idx, val))
 
-    # Reconstruir duplas numéricas (podría haber coordenadas y/o (Td;T))
     used_indices = set()
 
     def try_assign_pair(i1, v1, i2, v2):
         nonlocal coords, td_custom, t_custom
-        # Primero intentar como coordenadas si no hay coords aún
         if coords is None and (-90.0 <= v1 <= 90.0) and (-180.0 <= v2 <= 180.0):
             coords = (v1, v2)
             return 'coords'
-        # Luego intentar como (Td; T) si no está asignado
         if td_custom is None and t_custom is None:
             td_custom, t_custom = v1, v2
             return 'tdt'
         return None
 
-    # Emparejar consecutivos por posición en el input
     numeric_positions.sort(key=lambda x: x[0])
     i = 0
     while i < len(numeric_positions) - 1:
@@ -491,7 +456,6 @@ def procesar_consulta(query: str) -> None:
                 continue
         i += 1
 
-    # Validaciones mínimas
     missing = []
     if fecha is None:
         missing.append("fecha")
@@ -522,11 +486,9 @@ def procesar_consulta(query: str) -> None:
         print("No se pudo obtener datos de Open-Meteo para esa consulta.")
         return
 
-    # Elevación (usar el primer valor disponible o el promedio por seguridad)
     elevation = float(np.nanmedian(elevation_values)) if elevation_values else float('nan')
 
     # ---------------- Extraer datos por hora deseada ----------------
-    # Para cada modelo: obtener índice de la hora
     hour_index_by_model = {}
     for modelo, data in modelos_data.items():
         times = data.get("hourly", {}).get("time", [])
@@ -538,8 +500,7 @@ def procesar_consulta(query: str) -> None:
         print("No se encontró la hora solicitada en los datos devueltos.")
         return
 
-    # Construir matrices por altura: por-modelo valores de T y RH
-    # Estructura: dict[altura_m] -> { 'T': [(modelo, val)], 'RH': [(modelo, val)], 'Td': [(modelo, val)] }
+    # Estructura por altura
     por_altura: Dict[int, Dict[str, List[Tuple[str, float]]]] = {}
     for _, altura_m, var_T, var_RH in LEVELS:
         por_altura[altura_m] = {"T": [], "RH": [], "Td": []}
@@ -562,22 +523,17 @@ def procesar_consulta(query: str) -> None:
                 por_altura[altura_m]["T"].append((modelo, float(T)))
             if RH is not None:
                 por_altura[altura_m]["RH"].append((modelo, float(RH)))
-            # Td por modelo (si ambos existen)
             if T is not None and RH is not None and RH > 0:
                 Td = dewpoint_from_T_RH(float(T), float(RH))
                 if Td is not None:
                     por_altura[altura_m]["Td"].append((modelo, float(Td)))
 
-    # Reemplazos personalizados para 2m si corresponde
     if td_custom is not None:
-        # Sustituir Td_2m por el valor personalizado para todos los modelos (para el cálculo de la v)
-        pass  # El uso del Td_2m personalizado se aplicará en el cálculo de velocTermica por-modelo
+        pass  # se aplicará en velocidad térmica
     if t_custom is not None:
-        # Reemplazar T_2m en los promedios (efecto en salida de la fila de elevación)
         por_altura[2]["T"] = [("custom", float(t_custom))]
-        # No tocar RH_2m; Td_2m promedio lo recalculamos abajo si hace falta
 
-    # Promedios y std por altura (para T y Td), usando los valores disponibles
+    # Promedios y std por altura
     stats_por_altura = {}
     for altura_m, dct in por_altura.items():
         T_vals = [v for _, v in dct["T"]]
@@ -594,8 +550,6 @@ def procesar_consulta(query: str) -> None:
         }
 
     # ---------------- Cálculo de velocTermica por modelo ----------------
-    # Para calcular la desviación estándar de v, calculamos v por modelo cuando sea posible.
-
     def veloc_termica(RocioTermica: float, Rocio: float, Temp: float) -> Optional[float]:
         try:
             num = (1.1 ** abs(RocioTermica - Rocio)) - 1.0
@@ -607,37 +561,26 @@ def procesar_consulta(query: str) -> None:
         except Exception:
             return None
 
-    # Determinar la primera altura > elevación
     alturas_ordenadas = [h for h in sorted(por_altura.keys()) if h > elevation]
     if not alturas_ordenadas:
-        # Si ninguna altura es mayor a la elevación, de todos modos mostramos la fila de elevación
         alturas_ordenadas = []
 
-    # v por altura: mean y std
     v_stats_por_altura = {}
-
-    # Preparamos por-modelo Td_2m (o custom). Si no hay Td_2m para un modelo, usamos el promedio o el custom
     td2m_por_modelo = {}
-    # Recolectar Td_2m por modelo calculado previamente
     for modelo, val in por_altura[2]["Td"]:
         td2m_por_modelo[modelo] = val
 
-    # Si custom, forzarlo para todos los modelos
     if td_custom is not None:
         for modelo in modelos_data.keys():
             td2m_por_modelo[modelo] = float(td_custom)
 
-    # Si aún faltan modelos, completar con promedio global de Td_2m si existe
     if not td2m_por_modelo and not math.isnan(stats_por_altura[2]["Td_mean"]):
         mean_td2m = stats_por_altura[2]["Td_mean"]
         for modelo in modelos_data.keys():
             td2m_por_modelo[modelo] = mean_td2m
 
-    # Ahora, para cada altura > elevación, computar v por modelo
     for idx_alt, altura_m in enumerate(alturas_ordenadas):
         v_vals = []
-        # obtener T y Td por modelo en esa altura si existen
-        # Creamos diccionarios por modelo
         T_por_modelo = {m: v for m, v in por_altura[altura_m]["T"]}
         Td_por_modelo = {m: v for m, v in por_altura[altura_m]["Td"]}
 
@@ -646,7 +589,6 @@ def procesar_consulta(query: str) -> None:
             Td_h = Td_por_modelo.get(modelo)
             T_h = T_por_modelo.get(modelo)
 
-            # Si faltan datos por modelo exactamente, intentar caer al promedio de esa altura
             if Td_h is None and not math.isnan(stats_por_altura[altura_m]["Td_mean"]):
                 Td_h = stats_por_altura[altura_m]["Td_mean"]
             if T_h is None and not math.isnan(stats_por_altura[altura_m]["T_mean"]):
@@ -655,7 +597,6 @@ def procesar_consulta(query: str) -> None:
             if Td2m is None or Td_h is None or T_h is None:
                 continue
 
-            # Ajuste de RocioTermica según altura (solo a partir de la primera + siguientes)
             if idx_alt == 0:
                 RocioTermica = Td2m
             else:
@@ -674,18 +615,10 @@ def procesar_consulta(query: str) -> None:
         v_stats_por_altura[altura_m] = {"v_mean": v_mean, "v_std": v_std}
 
     # ---------------------- Salida formateada ---------------------- #
-    # Encabezado
-    # Línea de título
     lugar_str = lugar_nombre if lugar_nombre else f"{lat:.2f},{lon:.2f}"
-    fecha_str_in = tokens  # original por si el usuario quiere ver su entrada
-    # Mostrar fecha; hora; lugar; elevaciónm
-    # Al estilo del ejemplo
-
-    # Línea de cabecera de columnas con 2 separaciones de 7 espacios
     cabecera = "m" + " " * 7 + "R;T" + " " * 7 + "m/s"
 
     print("Prono térmico para:")
-    # Componer fecha de salida tipo: hoy/ayer/mañ si coincide, si no DD-MM-YYYY
     hoy = datetime.now().date()
     if fecha == hoy:
         fecha_etq = "hoy"
@@ -700,10 +633,8 @@ def procesar_consulta(query: str) -> None:
     print()
     print(cabecera)
 
-    # Filas: desde altura mayor a menor (> elevación), luego la fila de elevación
     alturas_out = sorted(alturas_ordenadas, reverse=True)
 
-    # Formateo: columnas separadas por 3 espacios, R;T sin decimales, v y std a 1 decimal
     def fmt_row(altura: int, td: float, t: float, v: Optional[float], vs: Optional[float]) -> str:
         td_str = "" if math.isnan(td) else f"{int(round(td))}"
         t_str = "" if math.isnan(t) else f"{int(round(t))}"
@@ -715,7 +646,6 @@ def procesar_consulta(query: str) -> None:
             vs_str = ""
         else:
             vs_str = f"±{vs:.1f}"
-        # Construir con 3 espacios entre columnas
         return f"{altura:>4}   {td_str};{t_str:}   {v_str}{vs_str}"
 
     for h in alturas_out:
@@ -725,12 +655,11 @@ def procesar_consulta(query: str) -> None:
         v_std = v_stats_por_altura.get(h, {}).get("v_std", float('nan'))
         print(fmt_row(h, td_mean, t_mean, v_mean, v_std))
 
-    # Fila de elevación con Td_2m (o custom), T_2m (o custom) y 0
     td2m_out = td_custom if td_custom is not None else stats_por_altura[2]["Td_mean"]
     t2m_out = t_custom if t_custom is not None else stats_por_altura[2]["T_mean"]
     print(fmt_row(int(round(elevation)), td2m_out, t2m_out, 0.0, 0.0))
 
-    #AGREGADO PARA EL SONDEO
+    # Sondeo gráfico
     print()
     sondeo = generar_sondeo(stats_por_altura, elevation)
     if sondeo:
@@ -739,18 +668,16 @@ def procesar_consulta(query: str) -> None:
             print(linea)
 
 
-
 # ------------------------------- Main -------------------------------- #
 if __name__ == "__main__":
     if len(sys.argv) >= 2:
         consulta = " ".join(sys.argv[1:])
     else:
-        consulta = input("Ingrese consulta (ej: 'hoy; 15hs; cuchi' ): ")
+        consulta = input("Ingrese consulta (ej: 'hoy; 15hs; cuchi'): ")
     try:
         procesar_consulta(consulta)
     except KeyboardInterrupt:
         print("\nCancelado por el usuario.")
     except Exception as e:
         print("Error inesperado:", str(e))
-        # Para depuración opcional:
         # import traceback; traceback.print_exc()
