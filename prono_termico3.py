@@ -233,12 +233,6 @@ from typing import Dict, List
 
 
 def _round_half_up(x: float) -> int:
-    """
-    Redondeo "comercial" (igual al ROUND() de Excel/Google Sheets): los valores
-    .5 siempre se alejan de cero. Python round() usa redondeo bancario
-    (al par), que no coincide con el comportamiento de las planillas de
-    cálculo, así que no se puede usar round() directamente aquí.
-    """
     return int(decimal.Decimal(repr(x)).to_integral_value(
         rounding=decimal.ROUND_HALF_UP
     ))
@@ -246,80 +240,24 @@ def _round_half_up(x: float) -> int:
 
 def generar_sondeo(stats: Dict[int, Dict[str, float]], elevacion: float,
                     ancho: int = 40) -> List[str]:
-    """
-    Genera un gráfico ASCII de sondeo (gradiente de humedad y temperatura
-    por altitud), replicando paso a paso el cálculo hecho originalmente en
-    una planilla de cálculo (Google Sheets).
 
-    Resumen del método (ver detalle en cada paso comentado abajo):
-      1) Se toman las altitudes >= elevacion (de stats), de mayor a menor,
-         con la elevación como última fila (base).
-      2) T y Td de cada altitud se "normalizan" sumándoles 0.5 °C por cada
-         100 m (compensación del enfriamiento adiabático), y se redondean
-         a 0 decimales con redondeo comercial.
-      3-4) A todos los Td normalizados se les suma el valor absoluto del
-         mínimo de Td normalizado, para que la traza de humedad nunca sea
-         negativa (offset de desplazamiento).
-      5-6) Se calcula, entre cada par de altitudes consecutivas, la
-         pendiente "altura / Td normalizado SIN redondear" (equivalente a
-         =SLOPE(altura; Td_norm) en Sheets, con la altura como Y). Según el
-         valor de esa pendiente se asigna \\, / o |.
-      7) Se calcula la diferencia absoluta entre T normalizado redondeado
-         y Td normalizado redondeado (gradiente térmico aparente).
-      8-9) Se calcula la pendiente "altura / T normalizado redondeado"
-         entre pares consecutivos, y según su valor se asigna \\, / o |.
-      10) Cada línea se construye como:
-            (Td_shift puntos) + carácter_humedad + (diff puntos) + carácter_temperatura
-         Es decir, las "posiciones" no son un escalado a un ancho fijo: son
-         directamente las cantidades numéricas obtenidas en los pasos 4 y 7.
-
-    Parámetros
-    ----------
-    stats : dict
-        {altura_m: {"T_mean": float, "Td_mean": float}}.
-    elevacion : float
-        Altitud del lugar (m); es la base, última fila del gráfico.
-    ancho : int
-        Sin uso directo en el cálculo de posiciones (estas surgen de los
-        valores numéricos de los pasos 4 y 7, no de un escalado a un ancho
-        fijo), pero se mantiene como parámetro por compatibilidad de firma
-        y como límite de seguridad para evitar líneas absurdamente largas
-        si algún dato de entrada fuera atípico.
-
-    Retorna
-    -------
-    List[str]
-        Líneas ya formateadas ("{altura:>4}m - {cadena}"), de la altitud
-        más alta a la más baja (sin incluir la altitud usada solo como
-        "tope" para calcular la pendiente de la fila más alta visible).
-        Lista vacía si stats está vacío o no hay altitudes >= elevación.
-    """
     if not stats:
         return []
 
     base = int(round(elevacion))
-
-    # 1) Altitudes disponibles >= base, ascendente.
     alturas = sorted(h for h in stats.keys() if h >= base)
 
-    # Si la base no está en stats, se usan los valores de stats[2] (2 m)
-    # como aproximación de la condición en superficie, y se la agrega a la
-    # lista aunque no haya aparecido en el filtro anterior.
     if base not in alturas:
         if 2 not in stats:
-            # Sin forma de obtener un valor para la base: no se puede armar
-            # la fila de cierre del gráfico.
             return []
         alturas = sorted(set(alturas) | {base})
 
     if len(alturas) < 2:
-        # Se necesitan al menos 2 altitudes para calcular una pendiente.
         return []
 
     def valores(h: int):
         if h in stats:
             return stats[h]["T_mean"], stats[h]["Td_mean"]
-        # Solo puede pasar para la base, ya cubierto arriba.
         return stats[2]["T_mean"], stats[2]["Td_mean"]
 
     T = {}
@@ -329,43 +267,27 @@ def generar_sondeo(stats: Dict[int, Dict[str, float]], elevacion: float,
         T[h] = t_val
         Td[h] = td_val
 
-    # 2) Normalización: +0.5 °C cada 100 m. Se guardan ambas versiones:
-    #    exacta (para la pendiente de humedad) y redondeada (para todo lo
-    #    demás), porque así surge de la verificación contra los cálculos
-    #    de referencia.
     T_norm = {h: T[h] + 0.5 * (h / 100.0) for h in alturas}
     Td_norm = {h: Td[h] + 0.5 * (h / 100.0) for h in alturas}
     T_norm_r = {h: _round_half_up(T_norm[h]) for h in alturas}
     Td_norm_r = {h: _round_half_up(Td_norm[h]) for h in alturas}
 
-    # 3-4) Offset para que la traza de humedad no tenga valores negativos.
     offset = _round_half_up(abs(min(Td_norm_r.values())))
     Td_shift = {h: Td_norm_r[h] + offset for h in alturas}
-
-    # 7) Diferencia absoluta entre T y Td normalizados (redondeados).
     diff = {h: abs(T_norm_r[h] - Td_norm_r[h]) for h in alturas}
 
     def _pendiente(h1: int, h2: int, x1: float, x2: float) -> float:
-        # Pendiente "altura / valor", análoga a =SLOPE(altura; valor) en
-        # Sheets para 2 puntos. Si los dos valores son iguales, se evita
-        # la división por cero sumando una variación mínima (0.001) al
-        # segundo valor, tal como se especificó.
         dx = x2 - x1
         if dx == 0:
             dx = 0.001
         return (h2 - h1) / dx
 
-    # 5-6) Pendiente de humedad: con Td normalizado SIN redondear.
     pend_H: Dict[int, float] = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
         pend_H[h2] = _pendiente(h1, h2, Td_norm[h1], Td_norm[h2])
-    # La altitud más baja de la lista de entrada no tiene "altitud previa"
-    # hacia abajo dentro del propio rango graficado; se le asigna la misma
-    # pendiente que a la siguiente hacia arriba para que tenga un valor.
     pend_H[alturas[0]] = pend_H[alturas[1]]
 
-    # 8-9) Pendiente de temperatura: con T normalizado redondeado.
     pend_T: Dict[int, float] = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
@@ -386,21 +308,21 @@ def generar_sondeo(stats: Dict[int, Dict[str, float]], elevacion: float,
             return "|"
         return "/"
 
-    # La altitud más alta de la lista solo sirvió como "tope" para calcular
-    # la pendiente de la altitud inmediatamente inferior; no se imprime
-    # como fila propia.
     alturas_grafico = sorted(
         (h for h in alturas if h >= base), reverse=True
     )[1:] if len(alturas) > 1 else []
 
-    # Límite de seguridad: evita líneas desmedidamente largas si algún dato
-    # de entrada fuera muy atípico (no debería ocurrir con datos normales).
     tope_seguridad = max(ancho * 4, 200)
 
     resultado: List[str] = []
     for h in alturas_grafico:
-        n_h = max(0, min(Td_shift[h], tope_seguridad))
-        n_t = max(0, min(diff[h], tope_seguridad))
+        # ---------- MODIFICACIÓN PARA REDUCIR PUNTOS A LA MITAD ----------
+        n_h_completo = max(0, min(Td_shift[h], tope_seguridad))
+        n_t_completo = max(0, min(diff[h], tope_seguridad))
+        n_h = n_h_completo // 2       # ← mitad de puntos para humedad
+        n_t = n_t_completo // 2       # ← mitad de puntos para temperatura
+        # ----------------------------------------------------------------
+
         c_h = _char_humedad(pend_H[h])
         c_t = _char_temperatura(pend_T[h])
         cadena = "." * n_h + c_h + "." * n_t + c_t
@@ -427,6 +349,7 @@ if __name__ == "__main__":
     print("Sondeo promedio:")
     for linea in generar_sondeo(stats, 600.0):
         print(linea)
+
       
 
 def find_hour_index(times: List[str], target_hour: int) -> Optional[int]:
