@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Script: pronostico_termico_open_meteo.py
+QUE HACE AMPLIADO: https://pastebin.com/RXyRErCq
 
 Descripción:
   - Interpreta una consulta flexible tipo: "hoy; 15hs; cuchi" o "01-12-2025; 14hs; -31,55; -64,33; -9; 25"
