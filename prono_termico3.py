@@ -228,8 +228,9 @@ def fetch_model_data(lat: float, lon: float, fecha: date, modelo: str, vars_list
         return None
 
 #AGREGADO PARA EL SONDEO GRAFICO
+
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, List, Any
+from typing import Dict, List, Optional
 
 
 def D(x) -> Decimal:
@@ -238,10 +239,6 @@ def D(x) -> Decimal:
 
 def round_half_up(x) -> int:
     return int(D(x).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-
-def fmt1(x: Decimal) -> str:
-    return f"{x:.1f}"
 
 
 def pendiente(h1: int, h2: int, v1: Decimal, v2: Decimal,
@@ -270,91 +267,119 @@ def char_temperatura(p: Decimal) -> str:
     return "/"
 
 
-def calcular_sondeo(stats: Dict[int, Dict[str, float]], elevacion: int) -> Dict[str, Any]:
+def generar_sondeo(
+    stats: Dict[int, Dict[str, float]],
+    elevacion: int,
+    t_2m: Optional[float] = None,
+    td_2m: Optional[float] = None,
+    ancho: int = 40
+) -> List[str]:
     if not stats:
-        raise ValueError("stats está vacío")
+        return []
 
-    alturas = sorted(h for h in stats if h >= elevacion)
-    if len(alturas) < 2:
-        raise ValueError("Se necesitan al menos 2 alturas")
+    base = int(round(elevacion))
 
-    # 1) valores base
-    T = {h: D(stats[h]["T_mean"]) for h in alturas}
-    Td = {h: D(stats[h]["Td_mean"]) for h in alturas}
+    # Alturas atmosféricas por encima de la base.
+    alturas_superiores = sorted(h for h in stats if h > base)
 
-    # 2) normalización exacta: +0.5 °C cada 100 m
+    if len(alturas_superiores) < 1:
+        return []
+
+    # La fila base SIEMPRE es la elevación del modelo, usando T_2m / Td_2m.
+    # Si no vienen explícitos, se intenta tomar stats[2]. Si no existe, como
+    # último recurso se toma stats[base].
+    if t_2m is None or td_2m is None:
+        if 2 in stats:
+            if t_2m is None:
+                t_2m = stats[2]["T_mean"]
+            if td_2m is None:
+                td_2m = stats[2]["Td_mean"]
+        elif base in stats:
+            if t_2m is None:
+                t_2m = stats[base]["T_mean"]
+            if td_2m is None:
+                td_2m = stats[base]["Td_mean"]
+        else:
+            return []
+
+    alturas = [base] + alturas_superiores
+
+    T = {h: D(stats[h]["T_mean"]) for h in alturas_superiores}
+    Td = {h: D(stats[h]["Td_mean"]) for h in alturas_superiores}
+
+    T[base] = D(t_2m)
+    Td[base] = D(td_2m)
+
+    # 2) Normalización exacta
     T_norm = {h: T[h] + D("0.5") * D(h) / D("100") for h in alturas}
     Td_norm = {h: Td[h] + D("0.5") * D(h) / D("100") for h in alturas}
 
-    # 3) mínimo dewpoint normalizado, abs y redondeo a 0 decimales
+    # 3) offset desde el mínimo dewpoint normalizado exacto
     offset = round_half_up(abs(min(Td_norm.values())))
 
-    # 4) desplazar dewpoint y redondear a 0 decimales
+    # 4) dewpoint desplazado, redondeado a 0 decimales
     Td_shift = {h: round_half_up(Td_norm[h] + D(offset)) for h in alturas}
 
-    # 7) separación entre temp y dewpoint: con valores exactos, luego redondeo
+    # 7) separación, usando exactos y redondeando al final
     diff = {h: round_half_up(abs(T_norm[h] - Td_norm[h])) for h in alturas}
 
-    # 5-6) pendiente humedad, usando Td_norm exacto
+    # 5-6) pendiente humedad con Td_norm exacto
     pend_H = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
         pend_H[h2] = pendiente(h1, h2, Td_norm[h1], Td_norm[h2])
-    pend_H[alturas[0]] = pend_H[alturas[1]]
+    pend_H[base] = pend_H[alturas[1]]
 
-    # 8-9) pendiente temperatura, usando T_norm exacto
+    # 8-9) pendiente temperatura con T_norm exacto
     pend_T = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
         pend_T[h2] = pendiente(h1, h2, T_norm[h1], T_norm[h2])
-    pend_T[alturas[0]] = pend_T[alturas[1]]
+    pend_T[base] = pend_T[alturas[1]]
 
     bar_H = {h: char_humedad(pend_H[h]) for h in alturas}
     bar_T = {h: char_temperatura(pend_T[h]) for h in alturas}
 
-    return {
-        "alturas": alturas,
-        "T_norm": T_norm,
-        "Td_norm": Td_norm,
-        "offset": offset,
-        "Td_shift": Td_shift,
-        "diff": diff,
-        "pend_H": pend_H,
-        "pend_T": pend_T,
-        "bar_H": bar_H,
-        "bar_T": bar_T,
-    }
-
-
-def generar_sondeo(stats: Dict[int, Dict[str, float]], elevacion: int) -> List[str]:
-    calc = calcular_sondeo(stats, elevacion)
-    alturas = calc["alturas"]
-
-    # La más alta solo se usa para pendiente; no se imprime
+    # La más alta solo sirve para pendiente; no se imprime.
     visibles = sorted(alturas, reverse=True)[1:]
 
-    lineas = []
+    filas = []
     for h in visibles:
-        izq = "." * calc["Td_shift"][h]
-        der = "." * calc["diff"][h]
-        linea = f"{h:04d}m - {izq}{calc['bar_H'][h]}{der}{calc['bar_T'][h]}"
-        lineas.append(linea)
-    return lineas
+        izq = Td_shift[h]
+        der = diff[h]
+        filas.append({
+            "altura": h,
+            "izq": max(0, izq),
+            "bar_h": bar_H[h],
+            "der": max(0, der),
+            "bar_t": bar_T[h],
+        })
 
+    # Largo bruto del cuerpo gráfico (sin altura).
+    max_cuerpo = max(f["izq"] + 1 + f["der"] + 1 for f in filas)
 
-def imprimir_debug(stats: Dict[int, Dict[str, float]], elevacion: int) -> None:
-    calc = calcular_sondeo(stats, elevacion)
+    # Recorte global por izquierda si alguna línea excede el ancho.
+    recorte_global = max(0, max_cuerpo - ancho)
 
+    resultado = []
+    for f in filas:
+        izq = max(0, f["izq"] - recorte_global)
 
-    print("\nGRAFICO FINAL")
-    for linea in generar_sondeo(stats, elevacion):
-        print(linea)
+        # Si una fila todavía excede el ancho porque tenía pocos puntos a la izquierda,
+        # se recorta adicionalmente SOLO por izquierda.
+        largo = izq + 1 + f["der"] + 1
+        if largo > ancho:
+            extra = largo - ancho
+            izq = max(0, izq - extra)
+
+        cuerpo = "." * izq + f["bar_h"] + "." * f["der"] + f["bar_t"]
+        resultado.append(f"{f['altura']:04d}m {cuerpo}")
+
+    return resultado
 
 
 if __name__ == "__main__":
-    # OJO: aquí va 1100, no 1000
     stats = {
-        600:  {"T_mean": 9.0,  "Td_mean": -4.7},
         800:  {"T_mean": 8.4,  "Td_mean": -5.0},
         1100: {"T_mean": 6.9,  "Td_mean": -5.6},
         1300: {"T_mean": 5.4,  "Td_mean": -6.5},
@@ -368,7 +393,18 @@ if __name__ == "__main__":
         3400: {"T_mean": -0.2, "Td_mean": -33.0},
     }
 
-  
+    # Fila base del modelo en 600 m usando T_2m / Td_2m
+    T_2m = 9.0
+    Td_2m = -4.7
+
+    for linea in generar_sondeo(
+        stats=stats,
+        elevacion=600,
+        t_2m=T_2m,
+        td_2m=Td_2m,
+        ancho=40
+    ):
+        print(linea)
 
 #FIN AGREGADO PARA IMPRIMIR SONDEO
       
