@@ -241,8 +241,13 @@ def round_half_up(x) -> int:
     return int(D(x).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def pendiente(h1: int, h2: int, v1: Decimal, v2: Decimal,
-              eps: Decimal = Decimal("0.001")) -> Decimal:
+def pendiente(
+    h1: int,
+    h2: int,
+    v1: Decimal,
+    v2: Decimal,
+    eps: Decimal = Decimal("0.001")
+) -> Decimal:
     dx = v2 - v1
     if dx == 0:
         dx = eps
@@ -250,7 +255,6 @@ def pendiente(h1: int, h2: int, v1: Decimal, v2: Decimal,
 
 
 def char_humedad(p: Decimal) -> str:
-    # =if(AND(p>1;p<460);"/";if(AND(p>=460;p<10000);"|";"\"))
     if p > 1 and p < 460:
         return "/"
     if p >= 460 and p < 10000:
@@ -259,12 +263,47 @@ def char_humedad(p: Decimal) -> str:
 
 
 def char_temperatura(p: Decimal) -> str:
-    # =if(AND(p<-1;p>-400);"\";if(AND(p<=-400;p>-10000);"|";"/"))
     if p < -1 and p > -400:
         return "\\"
     if p <= -400 and p > -10000:
         return "|"
     return "/"
+
+
+def _ajustar_segmentos(izq: int, der: int, ancho_cuerpo: int) -> tuple[int, int]:
+    """
+    Ajusta los puntos para que SIEMPRE entren:
+      [puntos izq] + barra_h + [puntos der] + barra_t
+
+    Prioridad:
+      1) conservar ambas barras
+      2) recortar puntos de la izquierda
+      3) si aún no alcanza, recortar puntos del tramo derecho
+    """
+    # mínimo absoluto: 2 barras
+    if ancho_cuerpo < 2:
+        return 0, 0
+
+    max_puntos = ancho_cuerpo - 2  # se reservan 2 chars para las barras
+    total_puntos = izq + der
+
+    if total_puntos <= max_puntos:
+        return izq, der
+
+    exceso = total_puntos - max_puntos
+
+    # primero recortar izquierda
+    quitar_izq = min(izq, exceso)
+    izq -= quitar_izq
+    exceso -= quitar_izq
+
+    # luego recortar derecha (puntos del medio), nunca la barra final
+    if exceso > 0:
+        quitar_der = min(der, exceso)
+        der -= quitar_der
+        exceso -= quitar_der
+
+    return max(0, izq), max(0, der)
 
 
 def generar_sondeo(
@@ -279,15 +318,12 @@ def generar_sondeo(
 
     base = int(round(elevacion))
 
-    # Alturas atmosféricas por encima de la base.
+    # alturas por encima de la base
     alturas_superiores = sorted(h for h in stats if h > base)
-
-    if len(alturas_superiores) < 1:
+    if not alturas_superiores:
         return []
 
-    # La fila base SIEMPRE es la elevación del modelo, usando T_2m / Td_2m.
-    # Si no vienen explícitos, se intenta tomar stats[2]. Si no existe, como
-    # último recurso se toma stats[base].
+    # fila base: elevación del modelo con T_2m / Td_2m
     if t_2m is None or td_2m is None:
         if 2 in stats:
             if t_2m is None:
@@ -306,31 +342,30 @@ def generar_sondeo(
 
     T = {h: D(stats[h]["T_mean"]) for h in alturas_superiores}
     Td = {h: D(stats[h]["Td_mean"]) for h in alturas_superiores}
-
     T[base] = D(t_2m)
     Td[base] = D(td_2m)
 
-    # 2) Normalización exacta
+    # normalización exacta
     T_norm = {h: T[h] + D("0.5") * D(h) / D("100") for h in alturas}
     Td_norm = {h: Td[h] + D("0.5") * D(h) / D("100") for h in alturas}
 
-    # 3) offset desde el mínimo dewpoint normalizado exacto
+    # offset
     offset = round_half_up(abs(min(Td_norm.values())))
 
-    # 4) dewpoint desplazado, redondeado a 0 decimales
+    # dew desplazado
     Td_shift = {h: round_half_up(Td_norm[h] + D(offset)) for h in alturas}
 
-    # 7) separación, usando exactos y redondeando al final
+    # separación entre temp y dew
     diff = {h: round_half_up(abs(T_norm[h] - Td_norm[h])) for h in alturas}
 
-    # 5-6) pendiente humedad con Td_norm exacto
+    # pendientes humedad
     pend_H = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
         pend_H[h2] = pendiente(h1, h2, Td_norm[h1], Td_norm[h2])
     pend_H[base] = pend_H[alturas[1]]
 
-    # 8-9) pendiente temperatura con T_norm exacto
+    # pendientes temperatura
     pend_T = {}
     for i in range(len(alturas) - 1):
         h1, h2 = alturas[i], alturas[i + 1]
@@ -340,39 +375,36 @@ def generar_sondeo(
     bar_H = {h: char_humedad(pend_H[h]) for h in alturas}
     bar_T = {h: char_temperatura(pend_T[h]) for h in alturas}
 
-    # La más alta solo sirve para pendiente; no se imprime.
+    # la más alta solo calcula pendiente
     visibles = sorted(alturas, reverse=True)[1:]
 
     filas = []
     for h in visibles:
-        izq = Td_shift[h]
-        der = diff[h]
         filas.append({
             "altura": h,
-            "izq": max(0, izq),
+            "izq": max(0, Td_shift[h]),
             "bar_h": bar_H[h],
-            "der": max(0, der),
+            "der": max(0, diff[h]),
             "bar_t": bar_T[h],
         })
 
-    # Largo bruto del cuerpo gráfico (sin altura).
-    max_cuerpo = max(f["izq"] + 1 + f["der"] + 1 for f in filas)
+    # prefijo fijo: "0600m "
+    prefijo_len = 6
+    ancho_cuerpo = max(2, ancho - prefijo_len)
 
-    # Recorte global por izquierda si alguna línea excede el ancho.
-    recorte_global = max(0, max_cuerpo - ancho)
+    # recorte global por izquierda según la fila más larga
+    max_cuerpo_bruto = max(f["izq"] + 1 + f["der"] + 1 for f in filas)
+    recorte_global = max(0, max_cuerpo_bruto - ancho_cuerpo)
 
     resultado = []
     for f in filas:
         izq = max(0, f["izq"] - recorte_global)
+        der = f["der"]
 
-        # Si una fila todavía excede el ancho porque tenía pocos puntos a la izquierda,
-        # se recorta adicionalmente SOLO por izquierda.
-        largo = izq + 1 + f["der"] + 1
-        if largo > ancho:
-            extra = largo - ancho
-            izq = max(0, izq - extra)
+        # ajuste final garantizando ambas barras
+        izq, der = _ajustar_segmentos(izq, der, ancho_cuerpo)
 
-        cuerpo = "." * izq + f["bar_h"] + "." * f["der"] + f["bar_t"]
+        cuerpo = "." * izq + f["bar_h"] + "." * der + f["bar_t"]
         resultado.append(f"{f['altura']:04d}m {cuerpo}")
 
     return resultado
@@ -393,18 +425,16 @@ if __name__ == "__main__":
         3400: {"T_mean": -0.2, "Td_mean": -33.0},
     }
 
-    # Fila base del modelo en 600 m usando T_2m / Td_2m
-    T_2m = 9.0
-    Td_2m = -4.7
-
+    print("Sondeo promedio:")
     for linea in generar_sondeo(
         stats=stats,
         elevacion=600,
-        t_2m=T_2m,
-        td_2m=Td_2m,
+        t_2m=9.0,
+        td_2m=-4.7,
         ancho=40
     ):
         print(linea)
+
 
 #FIN AGREGADO PARA IMPRIMIR SONDEO
       
