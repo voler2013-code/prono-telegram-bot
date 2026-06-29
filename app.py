@@ -1,4 +1,5 @@
 import os
+import html
 from fastapi import FastAPI, Request
 import httpx
 import domain
@@ -7,17 +8,6 @@ TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
 
 app = FastAPI()
-
-# Carácter Unicode visualmente igual al punto ASCII '.'
-DOT_UNICODE = "\u2024"  # ONE DOT LEADER
-
-
-def sanitize_for_telegram(text: str) -> str:
-    """
-    Reemplaza todos los puntos ASCII '.' por un carácter Unicode
-    que se ve igual pero que Telegram no interpreta como especial.
-    """
-    return text.replace('.', DOT_UNICODE)
 
 
 @app.get("/")
@@ -43,19 +33,18 @@ async def telegram_webhook(request: Request):
             "• 01-12-2025; 14hs; -31,55; -64,33; -9; 25\n"
             "Acepto lugar/fecha/horario/coords/dupla en cualquier orden."
         )
-        # Para el mensaje de ayuda no necesitamos formato especial
-        parse_mode = None
+        parse_mode = None  # Texto plano sin formato
     else:
         try:
             resultado = domain.resolver_consulta(text)
-            # 1. Reemplazamos los puntos conflictivos
-            safe_result = sanitize_for_telegram(resultado)
-            # 2. Envolvemos en bloque de código para respetar espacios y caracteres
-            reply = f"```\n{safe_result}\n```"
-            parse_mode = "MarkdownV2"
+            # Escapamos solo los caracteres que rompen HTML
+            safe = html.escape(resultado)
+            # Envolvemos en <pre> para respetar espacios y fuente monoespaciada
+            reply = f"<pre>{safe}</pre>"
+            parse_mode = "HTML"
         except Exception as e:
-            reply = f"```\nError: {e}\n```"
-            parse_mode = "MarkdownV2"
+            reply = f"<pre>Error: {html.escape(str(e))}</pre>"
+            parse_mode = "HTML"
 
     async with httpx.AsyncClient() as client:
         await client.post(
@@ -69,3 +58,4 @@ async def telegram_webhook(request: Request):
         )
 
     return {"ok": True}
+
