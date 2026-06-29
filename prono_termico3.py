@@ -543,6 +543,13 @@ def procesar_consulta(query: str) -> None:
     t2m_out = t_custom if t_custom is not None else stats_por_altura[2]["T_mean"]
     print(fmt_row(int(round(elevation)), td2m_out, t2m_out, 0.0, 0.0))
 
+       # SONDEO VISUAL
+    print()
+    lineas_sondeo = generar_sondeo(stats_por_altura, elevation, ancho=40)
+    for linea in lineas_sondeo:
+        print(linea)
+
+
 def generar_sondeo(estadisticas, elevacion, ancho=40):
     """
     Genera las líneas del sondeo visual (gradiente de humedad / temperatura).
@@ -625,33 +632,22 @@ def generar_sondeo(estadisticas, elevacion, ancho=40):
         else:
             char_temp = '|'
 
-        # Asegurar que las posiciones no se solapen y estén dentro del ancho
-        if pos_h < 0: pos_h = 0
-        if pos_h >= ancho: pos_h = ancho - 1
-        if pos_t < 0: pos_t = 0
-        if pos_t >= ancho: pos_t = ancho - 1
+        # Asegurar que las posiciones no se salgan del rango
+        pos_h = max(0, min(pos_h, ancho - 1))
+        pos_t = max(0, min(pos_t, ancho - 1))
+        if pos_t == pos_h:
+            pos_t = (pos_t + 1) % ancho   # evitar que se pisen
 
-        # Formar la línea: puntos hasta pos_h, luego char_hum, puntos hasta pos_t, char_temp, resto puntos
+        # Formar la línea
         linea = ['.'] * ancho
-        # El carácter de humedad se coloca en pos_h
         linea[pos_h] = char_hum
-        # El de temperatura se coloca en pos_t (solo si son distintos)
-        if pos_t != pos_h:
-            linea[pos_t] = char_temp
-        else:
-            # Si coinciden, se fuerza que el de temperatura vaya justo al lado
-            pos_t = (pos_t + 1) % ancho
-            linea[pos_t] = char_temp
+        linea[pos_t] = char_temp
 
         cadena = ''.join(linea)
         lineas.append(f"{h:>4}m - {cadena}")
 
     return lineas
 
-# --------------------------------------------
-    # SONDEO VISUAL
-    print()
-    print(generar_sondeo(stats_por_altura, elevation, ancho=40))
 
 
 # ------------------------------- Main -------------------------------- #
